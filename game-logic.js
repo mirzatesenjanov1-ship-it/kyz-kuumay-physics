@@ -62,15 +62,23 @@ function createRoom() {
     myName = document.getElementById('player-name').value.trim();
     if (!myName) return alert("Атыңызды жазыңыз!");
     myRole = "boy";
-    const code = Math.floor(100 + Math.random() * 899);
+    const code = String(Math.floor(100 + Math.random() * 899)); // Кодду Сөздүк (String) түрүндө жасайбыз
     document.getElementById('room-controls').style.display = "none";
     document.getElementById('wait-status').innerHTML = `БӨЛМӨ КОДУ: <b>${code}</b><br>Кызды күтүңүз...`;
+    
     sessionRef = firebase.database().ref('rooms/' + code);
     sessionRef.set({ 
-        players: { boy: myName }, sync: { boy: false, girl: false }, 
-        pos: { boy: 0, girl: 0 }, level: selectedLevelIdx, turn: "boy" 
+        players: { boy: myName }, 
+        sync: { boy: false, girl: false }, 
+        pos: { boy: 0, girl: 0 }, 
+        level: selectedLevelIdx, 
+        turn: "boy" 
     });
-    sessionRef.child('players/girl').on('value', s => { if(s.exists()) startSync(); });
+
+    // Кыз кошулганда 1 гана жолу угуу
+    sessionRef.child('players/girl').on('value', s => { 
+        if(s.exists() && s.val()) startSync(); 
+    });
 }
 
 function joinRoom() {
@@ -78,37 +86,54 @@ function joinRoom() {
     const code = document.getElementById('room-input').value.trim();
     if (!myName || !code) return alert("Атыңызды жана кодду жазыңыз!");
     myRole = "girl";
+    
     sessionRef = firebase.database().ref('rooms/' + code);
     sessionRef.once('value', s => {
         const data = s.val();
         if (s.exists() && data.players && !data.players.girl) {
             selectedLevelIdx = data.level;
-            sessionRef.child('players/girl').set(myName);
-            startSync();
-        } else { alert("Бөлмө табылган жок!"); }
+            sessionRef.child('players/girl').set(myName).then(() => {
+                startSync();
+            });
+        } else { 
+            alert("Бөлмө табылган жок же анда 2 оюнчу тең бар!"); 
+        }
     });
 }
 
+let syncListenerAttached = false;
 function startSync() {
     document.getElementById('setup-screen').style.display = "none";
     document.getElementById('sync-overlay').style.display = "flex";
-    sessionRef.child('sync').on('value', s => {
-        const sync = s.val();
-        if (sync && sync.boy && sync.girl && !gameActive) startCountdown();
-    });
+    
+    if (!syncListenerAttached) {
+        syncListenerAttached = true;
+        sessionRef.child('sync').on('value', s => {
+            const sync = s.val();
+            if (sync && sync.boy && sync.girl && !gameActive) {
+                startCountdown();
+            }
+        });
+    }
 }
 
 function triggerReady() { 
     document.getElementById('ready-btn').innerText = "КҮТҮҮ...";
+    document.getElementById('ready-btn').disabled = true;
     sessionRef.child('sync/' + myRole).set(true); 
 }
 
 function startCountdown() {
+    if (gameActive) return;
     gameActive = true;
     let c = 3;
     const timer = setInterval(() => {
-        document.getElementById('countdown').innerText = c > 0 ? c : "АЛГА!";
-        if (c === 0) { clearInterval(timer); setTimeout(launch, 500); }
+        const countdownEl = document.getElementById('countdown');
+        if (countdownEl) countdownEl.innerText = c > 0 ? c : "АЛГА!";
+        if (c === 0) { 
+            clearInterval(timer); 
+            setTimeout(launch, 500); 
+        }
         c--;
     }, 1000);
 }
@@ -120,8 +145,8 @@ function launch() {
     document.getElementById('sync-overlay').style.display = "none";
     document.getElementById('game-field').style.display = "block";
     document.getElementById('ui-bottom').style.display = "flex";
-    document.getElementById('boyVideo').play();
-    document.getElementById('girlVideo').play();
+    document.getElementById('boyVideo').play().catch(()=>{});
+    document.getElementById('girlVideo').play().catch(()=>{});
     renderGame();
 }
 
@@ -129,10 +154,9 @@ function launch() {
 function renderGame() {
     let qIdx = 0;
     let gameFinished = false;
-    const questions = allQuestions[selectedLevelIdx] || [];
+    const questions = typeof allQuestions !== 'undefined' ? (allQuestions[selectedLevelIdx] || []) : [];
     const currentQuestions = questions.slice(0, 30); 
 
-    // Варианттарды аралаштыруучу функция
     function shuffleOptions(array) {
         let arr = [...array];
         for (let i = arr.length - 1; i > 0; i--) {
@@ -148,16 +172,16 @@ function renderGame() {
             const turn = s.val();
             const q = currentQuestions[qIdx];
             if (!q) return checkWinner("Суроолор бүттү!");
+            
             const optArea = document.getElementById('options');
             const qText = document.getElementById('q-text');
             optArea.innerHTML = "";
+
             if (turn === myRole) {
                 optArea.classList.remove('disabled-overlay');
                 qText.innerText = q.q;
 
-                // Варианттарды аралаштырып чыгаруу
                 const shuffled = shuffleOptions(q.a);
-
                 shuffled.forEach(txt => {
                     const b = document.createElement('button');
                     b.className = 'btn opt-btn';
@@ -181,7 +205,7 @@ function renderGame() {
 
     sessionRef.child('turn').on('value', () => {
         sessionRef.child('lastQ').once('value', s => {
-            qIdx = (s.val() || 0) + 1;
+            qIdx = s.exists() ? (s.val() + 1) : 0;
             showQ();
         });
     });
@@ -190,8 +214,11 @@ function renderGame() {
         const p = s.val() || {boy:0, girl:0};
         const bPos = 5 + p.boy;
         const gPos = 45 + p.girl;
-        document.getElementById('boy-container').style.left = bPos + "%";
-        document.getElementById('girl-container').style.left = gPos + "%";
+        
+        const boyEl = document.getElementById('boy-container');
+        const girlEl = document.getElementById('girl-container');
+        if (boyEl) boyEl.style.left = bPos + "%";
+        if (girlEl) girlEl.style.left = gPos + "%";
         
         if (bPos >= (gPos - 2)) checkWinner("Жигит кызга жетти! 🏇");
         else if (gPos >= 90) checkWinner("Кыз качып кетти! 🐎");
@@ -206,7 +233,6 @@ function renderGame() {
         stopGameMusic();
         playMenuMusic(); 
 
-        // Оюнчулардын аттарын базадан алуу
         sessionRef.child('players').once('value', snapshot => {
             const players = snapshot.val() || { boy: "Жигит", girl: "Кыз" };
             const isBoyWin = reason.includes("жетти");
